@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "emerald_chunk_loader",
+  "version": "${version}",
+  "name": "Emerald Chunk Loader",
+  "description": "Keeps a 3x3 chunk area loaded while a redstone torch is attached to an emerald block.",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "com.abilitydex.emeraldchunkloader.EmeraldChunkLoader"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.0",
+    "minecraft": "~26.2",
+    "java": ">=25"
+  }
+}
