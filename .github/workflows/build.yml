@@ -1,39 +1,39 @@
 
-name: Build Emerald Chunk Loader
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.17.7'
+}
 
-on:
-  push:
-    branches: ["**"]
-  workflow_dispatch:
+version = project.mod_version
+group = project.maven_group
 
-permissions:
-  contents: read
+base {
+    archivesName = project.archives_base_name
+}
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+repositories {
+    mavenCentral()
+}
 
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${loader_version}"
+}
 
-      - name: Set up Java 25
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "25"
+processResources {
+    inputs.property "version", project.version
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
 
-      - name: Build mod
-        run: gradle build --no-daemon
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+}
 
-      - name: Upload build files
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: EmeraldChunkLoader-build
-          path: |
-            build/libs/*.jar
-          if-no-files-found: error
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    withSourcesJar()
+}
