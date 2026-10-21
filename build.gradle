@@ -20,6 +20,7 @@ repositories {
 dependencies {
     minecraft "com.mojang:minecraft:${minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${loader_version}"
+    include "net.fabricmc.fabric-api:fabric-api:0.161.0+26.2"
 }
 
 loom {
