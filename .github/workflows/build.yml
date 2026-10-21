@@ -1,6 +1,6 @@
 name: Build Emerald Chunk Loader
 
-on:
+‘on’:
 push:
 workflow_dispatch:
 
@@ -21,7 +21,6 @@ steps:
   - name: Build
     run: gradle build --no-daemon
   - name: Upload JAR
-    if: success()
     uses: actions/upload-artifact@v4
     with:
       name: EmeraldChunkLoader-build
