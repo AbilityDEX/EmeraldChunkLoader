@@ -22,6 +22,14 @@ dependencies {
     implementation "net.fabricmc:fabric-loader:${loader_version}"
 }
 
+loom {
+    mods {
+        "emerald_chunk_loader" {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
 processResources {
     inputs.property "version", project.version
 
