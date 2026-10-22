@@ -121,15 +121,16 @@ public final class EmeraldChunkLoader implements ModInitializer {
                     continue;
                 }
 
-                ServerLevel level = server.getLevel(
-                        net.minecraft.resources.Identifier
-                                .parse(parts[0]).equals(
-                                        server.overworld().dimension()
-                                                .identifier())
-                                ? server.overworld().dimension()
-                                : net.minecraft.resources.Identifier
-                                        .parse(parts[0])
-                );
+                net.minecraft.resources.Identifier dimension =
+        net.minecraft.resources.Identifier.parse(parts[0]);
+
+net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>
+        dimensionKey =
+        net.minecraft.resources.ResourceKey.create(
+                net.minecraft.core.registries.Registries.DIMENSION,
+                dimension);
+
+ServerLevel level = server.getLevel(dimensionKey);
 
                 if (level == null) {
                     continue;
