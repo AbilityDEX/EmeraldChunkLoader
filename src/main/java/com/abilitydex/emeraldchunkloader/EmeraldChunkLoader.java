@@ -1,6 +1,4 @@
-
 package com.abilitydex.emeraldchunkloader;
-
 import com.mojang.serialization.Codec;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -21,21 +19,18 @@ import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
-
 public final class EmeraldChunkLoader implements ModInitializer {
     public static final String MOD_ID = "emerald_chunk_loader";
-    public static final Logger LOGGER =
-            LoggerFactory.getLogger(MOD_ID);
-
+    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
     private static final Codec<LoaderData> CODEC =
             Codec.STRING.listOf().xmap(
                     LoaderData::new,
                     LoaderData::entries
             );
-
     private static final SavedDataType<LoaderData> DATA_TYPE =
             new SavedDataType<>(
                     Identifier.fromNamespaceAndPath(MOD_ID, "loaders"),
@@ -43,10 +38,8 @@ public final class EmeraldChunkLoader implements ModInitializer {
                     CODEC,
                     null
             );
-
     private static final Set<String> CANDIDATES = new HashSet<>();
     private int ticks;
-
     @Override
     public void onInitialize() {
         UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
@@ -54,59 +47,47 @@ public final class EmeraldChunkLoader implements ModInitializer {
                     && world instanceof ServerLevel level
                     && !player.isSpectator()) {
                 BlockPos clicked = hit.getBlockPos();
-
                 queue(level, clicked);
                 for (Direction direction : Direction.values()) {
                     queue(level, clicked.relative(direction));
                 }
             }
-
             return InteractionResult.PASS;
         });
-
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             processCandidates(server);
-
             if (++ticks >= 20) {
                 ticks = 0;
                 getData(server).validate(server);
             }
         });
-
         LOGGER.info("Emerald Chunk Loader initialized.");
     }
-
     private static void queue(ServerLevel level, BlockPos pos) {
         CANDIDATES.add(key(level, pos));
     }
-
     private static void processCandidates(MinecraftServer server) {
         if (CANDIDATES.isEmpty()) {
             return;
         }
-
         Set<String> pending = new HashSet<>(CANDIDATES);
         CANDIDATES.clear();
-
         LoaderData data = getData(server);
-
         for (String entry : pending) {
-            String[] parts = entry.split("\\|", 5);
+            String[] parts = entry.split("\\|", 4);
             if (parts.length != 4) {
                 continue;
             }
-
             ServerLevel level = findLevel(server, parts[0]);
             if (level == null) {
                 continue;
             }
-
             try {
                 BlockPos pos = new BlockPos(
                         Integer.parseInt(parts[1]),
                         Integer.parseInt(parts[2]),
-                        Integer.parseInt(parts[3]));
-
+                        Integer.parseInt(parts[3])
+                );
                 if (level.hasChunkAt(pos)) {
                     data.add(level, pos);
                 }
@@ -115,13 +96,11 @@ public final class EmeraldChunkLoader implements ModInitializer {
             }
         }
     }
-
     private static LoaderData getData(MinecraftServer server) {
         return server.overworld()
                 .getDataStorage()
                 .computeIfAbsent(DATA_TYPE);
     }
-
     private static ServerLevel findLevel(
             MinecraftServer server, String dimension) {
         try {
@@ -133,151 +112,190 @@ public final class EmeraldChunkLoader implements ModInitializer {
             return null;
         }
     }
-
     private static String key(ServerLevel level, BlockPos pos) {
         return level.dimension().identifier() + "|"
-                + pos.getX() + "|" + pos.getY() + "|" + pos.getZ();
+                + pos.getX() + "|"
+                + pos.getY() + "|"
+                + pos.getZ();
     }
-
+    private static String chunkKey(ServerLevel level, long packedChunk) {
+        return level.dimension().identifier() + "|" + packedChunk;
+    }
     private static boolean hasTorch(
             ServerLevel level, BlockPos emerald) {
         for (Direction direction : Direction.values()) {
             BlockPos torchPos = emerald.relative(direction);
             var state = level.getBlockState(torchPos);
-
             if (direction == Direction.UP
                     && state.is(Blocks.REDSTONE_TORCH)) {
                 return true;
             }
-
-            if (state.is(Blocks.REDSTONE_WALL_TORCH)
+            if (direction.getAxis().isHorizontal()
+                    && state.is(Blocks.REDSTONE_WALL_TORCH)
                     && state.hasProperty(RedstoneWallTorchBlock.FACING)
                     && state.getValue(RedstoneWallTorchBlock.FACING)
-                            == direction.getOpposite()) {
+                            == direction) {
                 return true;
             }
         }
-
         return false;
     }
-
     private static final class LoaderData extends SavedData {
         private final Set<String> loaders = new HashSet<>();
-
+        private final Set<String> ownedChunks = new HashSet<>();
         LoaderData() {
         }
-
-        LoaderData(java.util.List<String> entries) {
-            loaders.addAll(entries);
+        LoaderData(List<String> entries) {
+            for (String entry : entries) {
+                if (entry.startsWith("L|")) {
+                    loaders.add(entry.substring(2));
+                } else if (entry.startsWith("C|")) {
+                    ownedChunks.add(entry.substring(2));
+                }
+            }
         }
-
-        java.util.List<String> entries() {
-            return loaders.stream().sorted().toList();
+        List<String> entries() {
+            List<String> result = new ArrayList<>();
+            for (String loader : loaders) {
+                result.add("L|" + loader);
+            }
+            for (String chunk : ownedChunks) {
+                result.add("C|" + chunk);
+            }
+            result.sort(String::compareTo);
+            return result;
         }
-
         void add(ServerLevel level, BlockPos pos) {
             if (!level.getBlockState(pos).is(Blocks.EMERALD_BLOCK)
                     || !hasTorch(level, pos)) {
                 return;
             }
-
             if (loaders.add(key(level, pos))) {
                 setDirty();
+                LOGGER.info(
+                        "Registered emerald chunk loader at {} in {}",
+                        pos,
+                        level.dimension().identifier()
+                );
             }
         }
-
         void validate(MinecraftServer server) {
             Set<String> invalid = new HashSet<>();
-
             for (String entry : new HashSet<>(loaders)) {
-                String[] parts = entry.split("\\|", 5);
+                String[] parts = entry.split("\\|", 4);
                 if (parts.length != 4) {
                     invalid.add(entry);
                     continue;
                 }
-
                 ServerLevel level = findLevel(server, parts[0]);
                 if (level == null) {
+                    // The dimension may not be available yet.
                     continue;
                 }
-
-                BlockPos pos;
                 try {
-                    pos = new BlockPos(
+                    BlockPos pos = new BlockPos(
                             Integer.parseInt(parts[1]),
                             Integer.parseInt(parts[2]),
-                            Integer.parseInt(parts[3]));
-                } catch (NumberFormatException exception) {
-                    invalid.add(entry);
-                    continue;
-                }
-
-                if (!level.hasChunkAt(pos)) {
-                    continue;
-                }
-
-                if (!level.getBlockState(pos).is(Blocks.EMERALD_BLOCK)
-                        || !hasTorch(level, pos)) {
-                    invalid.add(entry);
-                }
-            }
-
-            if (!invalid.isEmpty()) {
-                loaders.removeAll(invalid);
-                setDirty();
-            }
-
-            // Reconcile every chunk against all remaining loaders.
-            for (ServerLevel level : server.getAllLevels()) {
-                Set<Long> required = new HashSet<>();
-
-                for (String entry : loaders) {
-                    String[] parts = entry.split("\\|", 5);
-                    if (parts.length != 4
-                            || !parts[0].equals(
-                                    level.dimension().identifier().toString())) {
+                            Integer.parseInt(parts[3])
+                    );
+                    if (!level.hasChunkAt(pos)) {
                         continue;
                     }
-
-                    try {
-                        BlockPos pos = new BlockPos(
-                                Integer.parseInt(parts[1]),
-                                Integer.parseInt(parts[2]),
-                                Integer.parseInt(parts[3]));
-
-                        if (!level.hasChunkAt(pos)
-                                || !level.getBlockState(pos)
-                                        .is(Blocks.EMERALD_BLOCK)
-                                || !hasTorch(level, pos)) {
-                            continue;
-                        }
-
-                        ChunkPos center = ChunkPos.containing(pos);
-
-                        for (int x = center.x() - 1;
-                             x <= center.x() + 1; x++) {
-                            for (int z = center.z() - 1;
-                                 z <= center.z() + 1; z++) {
-                                required.add(ChunkPos.pack(x, z));
-                            }
-                        }
-                    } catch (NumberFormatException ignored) {
-                        // Invalid entries are discarded during validation.
+                    if (!level.getBlockState(pos).is(Blocks.EMERALD_BLOCK)
+                            || !hasTorch(level, pos)) {
+                        invalid.add(entry);
                     }
+                } catch (NumberFormatException exception) {
+                    invalid.add(entry);
                 }
-
-                Set<Long> forced = new HashSet<>(
-                        level.getChunkSource().getForceLoadedChunks());
-
-                for (long packed : required) {
-                    ChunkPos chunk = ChunkPos.unpack(packed);
-                    level.setChunkForced(chunk.x(), chunk.z(), true);
+            }
+            if (loaders.removeAll(invalid)) {
+                setDirty();
+                LOGGER.info(
+                        "Removed {} inactive emerald chunk loader(s)",
+                        invalid.size()
+                );
+            }
+            for (ServerLevel level : server.getAllLevels()) {
+                reconcileLevel(level);
+            }
+        }
+        private void reconcileLevel(ServerLevel level) {
+            String dimension =
+                    level.dimension().identifier().toString();
+            Set<Long> required = new HashSet<>();
+            // Calculate the union of all active loaders' 3x3 areas.
+            for (String entry : loaders) {
+                String[] parts = entry.split("\\|", 4);
+                if (parts.length != 4
+                        || !parts[0].equals(dimension)) {
+                    continue;
                 }
-
-                for (long packed : forced) {
+                try {
+                    BlockPos pos = new BlockPos(
+                            Integer.parseInt(parts[1]),
+                            Integer.parseInt(parts[2]),
+                            Integer.parseInt(parts[3])
+                    );
+                    if (!level.hasChunkAt(pos)
+                            || !level.getBlockState(pos)
+                                    .is(Blocks.EMERALD_BLOCK)
+                            || !hasTorch(level, pos)) {
+                        continue;
+                    }
+                    ChunkPos center = ChunkPos.containing(pos);
+                    for (int x = center.x() - 1;
+                         x <= center.x() + 1; x++) {
+                        for (int z = center.z() - 1;
+                             z <= center.z() + 1; z++) {
+                            required.add(ChunkPos.pack(x, z));
+                        }
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Invalid loader entries are handled during validation.
+                }
+            }
+            Set<Long> currentlyForced = new HashSet<>(
+                    level.getChunkSource().getForceLoadedChunks()
+            );
+            // Release only chunks this mod previously claimed.
+            Set<String> ownedForThisDimension = new HashSet<>();
+            for (String owned : ownedChunks) {
+                int separator = owned.indexOf('|');
+                if (separator > 0
+                        && owned.substring(0, separator).equals(dimension)) {
+                    ownedForThisDimension.add(owned);
+                }
+            }
+            for (String owned : ownedForThisDimension) {
+                int separator = owned.indexOf('|');
+                try {
+                    long packed = Long.parseLong(
+                            owned.substring(separator + 1)
+                    );
                     if (!required.contains(packed)) {
                         ChunkPos chunk = ChunkPos.unpack(packed);
-                        level.setChunkForced(chunk.x(), chunk.z(), false);
+                        level.setChunkForced(
+                                chunk.x(), chunk.z(), false
+                        );
+                        ownedChunks.remove(owned);
+                        setDirty();
+                    }
+                } catch (NumberFormatException exception) {
+                    ownedChunks.remove(owned);
+                    setDirty();
+                }
+            }
+            // Force required chunks, but do not claim chunks already
+            // force-loaded by another system.
+            for (long packed : required) {
+                ChunkPos chunk = ChunkPos.unpack(packed);
+                if (!currentlyForced.contains(packed)) {
+                    level.setChunkForced(
+                            chunk.x(), chunk.z(), true
+                    );
+                    if (ownedChunks.add(chunkKey(level, packed))) {
+                        setDirty();
                     }
                 }
             }
