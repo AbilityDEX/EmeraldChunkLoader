@@ -7,10 +7,14 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RedstoneWallTorchBlock;
 import net.minecraft.world.level.saveddata.SavedData;
@@ -34,13 +38,13 @@ public final class EmeraldChunkLoader implements ModInitializer {
 
     private static final SavedDataType<LoaderData> DATA_TYPE =
             new SavedDataType<>(
-                    net.minecraft.resources.Identifier.fromNamespaceAndPath(
-                            MOD_ID, "loaders"),
+                    Identifier.fromNamespaceAndPath(MOD_ID, "loaders"),
                     LoaderData::new,
                     CODEC,
                     null
             );
 
+    private static final Set<String> CANDIDATES = new HashSet<>();
     private int ticks;
 
     @Override
@@ -49,39 +53,112 @@ public final class EmeraldChunkLoader implements ModInitializer {
             if (!world.isClientSide()
                     && world instanceof ServerLevel level
                     && !player.isSpectator()) {
-                LoaderData data = getData(level.getServer());
+                BlockPos clicked = hit.getBlockPos();
 
+                queue(level, clicked);
                 for (Direction direction : Direction.values()) {
-                    BlockPos candidate =
-                            hit.getBlockPos().relative(direction);
-                    if (level.getBlockState(candidate)
-                            .is(Blocks.EMERALD_BLOCK)) {
-                        data.add(level, candidate);
-                    }
+                    queue(level, clicked.relative(direction));
                 }
-
-                data.add(level, hit.getBlockPos());
             }
 
             return InteractionResult.PASS;
         });
 
         ServerTickEvents.END_SERVER_TICK.register(server -> {
-            if (++ticks < 20) {
-                return;
-            }
-            ticks = 0;
+            processCandidates(server);
 
-            LoaderData data = getData(server);
-            data.validate(server);
+            if (++ticks >= 20) {
+                ticks = 0;
+                getData(server).validate(server);
+            }
         });
 
         LOGGER.info("Emerald Chunk Loader initialized.");
     }
 
+    private static void queue(ServerLevel level, BlockPos pos) {
+        CANDIDATES.add(key(level, pos));
+    }
+
+    private static void processCandidates(MinecraftServer server) {
+        if (CANDIDATES.isEmpty()) {
+            return;
+        }
+
+        Set<String> pending = new HashSet<>(CANDIDATES);
+        CANDIDATES.clear();
+
+        LoaderData data = getData(server);
+
+        for (String entry : pending) {
+            String[] parts = entry.split("\\|", 5);
+            if (parts.length != 4) {
+                continue;
+            }
+
+            ServerLevel level = findLevel(server, parts[0]);
+            if (level == null) {
+                continue;
+            }
+
+            try {
+                BlockPos pos = new BlockPos(
+                        Integer.parseInt(parts[1]),
+                        Integer.parseInt(parts[2]),
+                        Integer.parseInt(parts[3]));
+
+                if (level.hasChunkAt(pos)) {
+                    data.add(level, pos);
+                }
+            } catch (NumberFormatException ignored) {
+                // Ignore malformed candidate positions.
+            }
+        }
+    }
+
     private static LoaderData getData(MinecraftServer server) {
-        ServerLevel overworld = server.overworld();
-        return overworld.getDataStorage().computeIfAbsent(DATA_TYPE);
+        return server.overworld()
+                .getDataStorage()
+                .computeIfAbsent(DATA_TYPE);
+    }
+
+    private static ServerLevel findLevel(
+            MinecraftServer server, String dimension) {
+        try {
+            Identifier id = Identifier.parse(dimension);
+            ResourceKey<Level> key =
+                    ResourceKey.create(Registries.DIMENSION, id);
+            return server.getLevel(key);
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    private static String key(ServerLevel level, BlockPos pos) {
+        return level.dimension().identifier() + "|"
+                + pos.getX() + "|" + pos.getY() + "|" + pos.getZ();
+    }
+
+    private static boolean hasTorch(
+            ServerLevel level, BlockPos emerald) {
+        for (Direction direction : Direction.values()) {
+            BlockPos torchPos = emerald.relative(direction);
+            var state = level.getBlockState(torchPos);
+
+            if (direction == Direction.UP
+                    && state.is(Blocks.REDSTONE_TORCH)) {
+                return true;
+            }
+
+            if (state.is(Blocks.REDSTONE_WALL_TORCH)
+                    && state.hasProperty(RedstoneWallTorchBlock.FACING)
+                    && state.getValue(RedstoneWallTorchBlock.FACING)
+                            == direction.getOpposite()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static final class LoaderData extends SavedData {
@@ -104,10 +181,8 @@ public final class EmeraldChunkLoader implements ModInitializer {
                 return;
             }
 
-            String entry = key(level, pos);
-            if (loaders.add(entry)) {
+            if (loaders.add(key(level, pos))) {
                 setDirty();
-                updateArea(level, pos, true);
             }
         }
 
@@ -121,17 +196,7 @@ public final class EmeraldChunkLoader implements ModInitializer {
                     continue;
                 }
 
-                net.minecraft.resources.Identifier dimension =
-        net.minecraft.resources.Identifier.parse(parts[0]);
-
-net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>
-        dimensionKey =
-        net.minecraft.resources.ResourceKey.create(
-                net.minecraft.core.registries.Registries.DIMENSION,
-                dimension);
-
-ServerLevel level = server.getLevel(dimensionKey);
-
+                ServerLevel level = findLevel(server, parts[0]);
                 if (level == null) {
                     continue;
                 }
@@ -153,76 +218,67 @@ ServerLevel level = server.getLevel(dimensionKey);
 
                 if (!level.getBlockState(pos).is(Blocks.EMERALD_BLOCK)
                         || !hasTorch(level, pos)) {
-                    updateArea(level, pos, false);
                     invalid.add(entry);
                 }
             }
 
-            if (loaders.removeAll(invalid)) {
+            if (!invalid.isEmpty()) {
+                loaders.removeAll(invalid);
                 setDirty();
             }
 
-            for (String entry : new HashSet<>(loaders)) {
-                String[] parts = entry.split("\\|", 5);
-                if (parts.length != 4) {
-                    continue;
+            // Reconcile every chunk against all remaining loaders.
+            for (ServerLevel level : server.getAllLevels()) {
+                Set<Long> required = new HashSet<>();
+
+                for (String entry : loaders) {
+                    String[] parts = entry.split("\\|", 5);
+                    if (parts.length != 4
+                            || !parts[0].equals(
+                                    level.dimension().identifier().toString())) {
+                        continue;
+                    }
+
+                    try {
+                        BlockPos pos = new BlockPos(
+                                Integer.parseInt(parts[1]),
+                                Integer.parseInt(parts[2]),
+                                Integer.parseInt(parts[3]));
+
+                        if (!level.hasChunkAt(pos)
+                                || !level.getBlockState(pos)
+                                        .is(Blocks.EMERALD_BLOCK)
+                                || !hasTorch(level, pos)) {
+                            continue;
+                        }
+
+                        ChunkPos center = ChunkPos.containing(pos);
+
+                        for (int x = center.x() - 1;
+                             x <= center.x() + 1; x++) {
+                            for (int z = center.z() - 1;
+                                 z <= center.z() + 1; z++) {
+                                required.add(ChunkPos.pack(x, z));
+                            }
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // Invalid entries are discarded during validation.
+                    }
                 }
 
-                net.minecraft.resources.Identifier dimension =
-                        net.minecraft.resources.Identifier.parse(parts[0]);
-                ServerLevel level = server.getLevel(
-                        net.minecraft.resources.ResourceKey.create(
-                                net.minecraft.core.registries.Registries.DIMENSION,
-                                dimension));
-                if (level == null) {
-                    continue;
+                Set<Long> forced = new HashSet<>(
+                        level.getChunkSource().getForceLoadedChunks());
+
+                for (long packed : required) {
+                    ChunkPos chunk = ChunkPos.unpack(packed);
+                    level.setChunkForced(chunk.x(), chunk.z(), true);
                 }
 
-                try {
-                    BlockPos pos = new BlockPos(
-                            Integer.parseInt(parts[1]),
-                            Integer.parseInt(parts[2]),
-                            Integer.parseInt(parts[3]));
-                    updateArea(level, pos, true);
-                } catch (NumberFormatException ignored) {
-                    // Invalid saved entry will be removed on validation.
-                }
-            }
-        }
-
-        private static String key(ServerLevel level, BlockPos pos) {
-            return level.dimension().identifier() + "|"
-                    + pos.getX() + "|" + pos.getY() + "|" + pos.getZ();
-        }
-
-        private static boolean hasTorch(
-                ServerLevel level, BlockPos emerald) {
-            for (Direction direction : Direction.values()) {
-                BlockPos torchPos = emerald.relative(direction);
-                var state = level.getBlockState(torchPos);
-
-                if (direction == Direction.UP
-                        && state.is(Blocks.REDSTONE_TORCH)) {
-                    return true;
-                }
-
-                if (state.is(Blocks.REDSTONE_WALL_TORCH)
-                        && state.hasProperty(RedstoneWallTorchBlock.FACING)
-                        && state.getValue(RedstoneWallTorchBlock.FACING)
-                                == direction.getOpposite()) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private static void updateArea(
-                ServerLevel level, BlockPos pos, boolean force) {
-            ChunkPos center = ChunkPos.containing(pos);
-
-            for (int x = center.x() - 1; x <= center.x() + 1; x++) {
-                for (int z = center.z() - 1; z <= center.z() + 1; z++) {
-                    level.setChunkForced(x, z, force);
+                for (long packed : forced) {
+                    if (!required.contains(packed)) {
+                        ChunkPos chunk = ChunkPos.unpack(packed);
+                        level.setChunkForced(chunk.x(), chunk.z(), false);
+                    }
                 }
             }
         }
