@@ -10,7 +10,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RedstoneWallTorchBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -47,6 +46,7 @@ public final class EmeraldChunkLoader implements ModInitializer {
             if (!world.isClientSide()
                     && world instanceof ServerLevel level
                     && !player.isSpectator()) {
+
                 String dimension =
                         level.dimension().identifier().toString();
 
@@ -54,11 +54,11 @@ public final class EmeraldChunkLoader implements ModInitializer {
                         dimension, ignored -> new HashSet<>());
 
                 BlockPos clicked = hit.getBlockPos();
-
                 positions.add(clicked.immutable());
 
                 for (Direction direction : Direction.values()) {
-                    positions.add(clicked.relative(direction).immutable());
+                    positions.add(
+                            clicked.relative(direction).immutable());
                 }
             }
 
@@ -99,7 +99,7 @@ public final class EmeraldChunkLoader implements ModInitializer {
             }
 
             if (hasAttachedRedstoneTorch(level, pos)) {
-                current.add(new ChunkPos(pos).toLong());
+                current.add(ChunkPos.containing(pos).pack());
             }
         }
 
@@ -138,9 +138,10 @@ public final class EmeraldChunkLoader implements ModInitializer {
 
             if (state.is(Blocks.REDSTONE_WALL_TORCH)
                     && state.hasProperty(
-                    RedstoneWallTorchBlock.FACING)
+                            RedstoneWallTorchBlock.FACING)
                     && state.getValue(
-                    RedstoneWallTorchBlock.FACING) == direction.getOpposite()) {
+                            RedstoneWallTorchBlock.FACING)
+                            == direction.getOpposite()) {
                 return true;
             }
         }
@@ -149,7 +150,7 @@ public final class EmeraldChunkLoader implements ModInitializer {
     }
 
     private void forceArea(ServerLevel level, long packed) {
-        ChunkPos center = new ChunkPos(packed);
+        ChunkPos center = ChunkPos.unpack(packed);
         String dimension = level.dimension().identifier().toString();
 
         Map<Long, Integer> references = chunkReferences.computeIfAbsent(
@@ -160,14 +161,14 @@ public final class EmeraldChunkLoader implements ModInitializer {
 
         for (int x = center.x() - 1; x <= center.x() + 1; x++) {
             for (int z = center.z() - 1; z <= center.z() + 1; z++) {
-                long chunk = new ChunkPos(x, z).toLong();
+                long chunk = ChunkPos.pack(x, z);
                 int count = references.getOrDefault(chunk, 0);
 
                 references.put(chunk, count + 1);
 
                 if (count == 0
                         && !level.getChunkSource()
-                        .getForcedChunks().contains(chunk)) {
+                                .getForceLoadedChunks().contains(chunk)) {
                     level.setChunkForced(x, z, true);
                     owned.add(chunk);
                 }
@@ -176,12 +177,10 @@ public final class EmeraldChunkLoader implements ModInitializer {
     }
 
     private void releaseArea(ServerLevel level, long packed) {
-        ChunkPos center = new ChunkPos(packed);
+        ChunkPos center = ChunkPos.unpack(packed);
         String dimension = level.dimension().identifier().toString();
 
-        Map<Long, Integer> references = chunkReferences.get(
-                dimension);
-
+        Map<Long, Integer> references = chunkReferences.get(dimension);
         Set<Long> owned = ownedChunks.get(dimension);
 
         if (references == null || owned == null) {
@@ -190,7 +189,7 @@ public final class EmeraldChunkLoader implements ModInitializer {
 
         for (int x = center.x() - 1; x <= center.x() + 1; x++) {
             for (int z = center.z() - 1; z <= center.z() + 1; z++) {
-                long chunk = new ChunkPos(x, z).toLong();
+                long chunk = ChunkPos.pack(x, z);
                 Integer count = references.get(chunk);
 
                 if (count == null) {
